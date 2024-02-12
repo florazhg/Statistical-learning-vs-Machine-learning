@@ -1,9 +1,11 @@
+/******************************************* DGP1 : LINEAR INDEPENDANCE ***********************************************/
+*OPTIONS NONOTES;
 proc iml;
 
-/* parameters */
+/**************************************** parameters ****************************************/
 N = 100;  /* number of observations */
 P = 50;   /* number of explanatory variables */
-beta = {1.5, 0.9, 1, 0.1, -0.5}; /* betas of our model */
+beta = {1.5, 0.9, 1, 1.8, -0.5}; /* betas of our model */
 
 /* null mean vector : 1 row of 50 zeros */
 meanVec = j(1, P, 0);
@@ -11,21 +13,25 @@ meanVec = j(1, P, 0);
 /* variance-covariance matrix, for DGP1 we use the identity matrix */
 covMatrix = I(P);
 
-*call randseed(123); /* for reproductible results */
 
-/* set the counters */
-success=0;
-overfitting=0;
-overfitting_1=0;
-underfitting=0;
-underfitting_1=0;
+/**************************************** counters ****************************************/
+success=0; /* all 5 true variables are selected */
+overfitting=0; /* all 5 true variables are selected + other variables */
+underfitting=0; /* less than 5 true variables are selected */
+fail=0; /* less than 5 true variables are selected + other variables */
 
-do i = 1 to 1000  ; /* 1000 databases*/
+/* change the algo and criteria here */
+%Let algo=elasticnet;
+%Let criteria=cp;
+%Let criteria2=cv;
+
+/**************************************** 1000 data sets loop ****************************************/
+do i = 1 to 1000 ;
 	X = RandNormal(N, meanVec, covMatrix);
 
 	/*generate the first equation*/
 	X5 = X[,1:5]; /*only use the first 5 explanatory variables*/
-	epsilon = RandNormal(N, 0, 0.1); /* errors iid normal distribution */
+	epsilon = RandNormal(N, 0, 0.01); /* errors iid normal distribution */
 
 	/* equation */
 	Y = X5 * beta + epsilon;
@@ -40,29 +46,21 @@ do i = 1 to 1000  ; /* 1000 databases*/
 	
 
 
-	/* ALGORITHM TEST */
+	/********** ALGORITHM TEST ***********/
 	submit;
 	
-	proc glmselect data=DGP1 outdesign=tab1 noprint;
-	model y = X1-X50 /selection=forward (CHOOSE=AIC);
-	run;
-	
-		proc glmselect data=DGP1 outdesign=tab1 noprint;
-	model y = X1-X50 /selection=backward (CHOOSE=AIC);
+	proc glmselect data=DGP1 outdesign=DGP1_results noprint;
+	model y = X1-X50 /selection=&algo (CHOOSE=&criteria stop=&criteria2);
 	run;
 
 
-	proc glmselect data=DGP1 outdesign=tab1 noprint;
-		model y = X1-X50 /selection=stepwise (CHOOSE=BIC);
-	run;
-
-	proc transpose data=tab1 out=tab1;
+	proc transpose data=DGP1_results out=DGP1_results;
 	run;
 	endsubmit;
 
-	use tab1;
+	use DGP1_results;
 	read all;
-	close tab1;
+	close DGP1_results;
 
 	/*creating the sets*/
 	selected_variables=_NAME_[1:nrow(_name_)-1]; /*selected variables*/
@@ -73,55 +71,41 @@ do i = 1 to 1000  ; /* 1000 databases*/
 	inter=Xsect(selected_variables,true_variables); /*select the variables that our algorithm predicted right*/
 	*print inter; 
 
-	if ncol(inter)=6 & nrow(selected_variables)=6 then do;
-		*print "right selection";
+	if ncol(inter)=6 & nrow(selected_variables)=6 then 
 		success = success +1 ;
-		end;
+	else q=1;
 
-	else if ncol(inter)=6 & nrow(selected_variables)>7 then do;
+	if ncol(inter)=6 & nrow(selected_variables)>6 then 
 		overfitting = overfitting+1;
-		*print "overfitting";
-		end;
+	else q=1;
 	
-	else if ncol(inter)=6 & nrow(selected_variables)>6 then do;
-		overfitting_1 = overfitting_1+1;
-		*print "overfitting_1";
-		end;
-
-	else if ncol(inter) ^= 6 & nrow(selected_variables)<=6 then do;
+	if ncol(inter) < 6 & nrow(selected_variables)=ncol(inter) then 
 		underfitting = underfitting+1;
-		*print "underfitting";
-		end;
+	else q=1;
 
-	else if ncol(inter) ^= 6 & nrow(selected_variables)>=6 then do;
-		underfitting_1= underfitting_1+1;
-		*print "underfitting_1";
-		end;
+	if ncol(inter) < 6 & nrow(selected_variables)>=6 then 
+		fail= fail+1;
+	else q=1;
 
 end;
 
-/*calculate metrics after the loop, must be equal to 1000*/
-total=success+overfitting+overfitting_1+underfitting+underfitting_1;
+/* total must be equal to 1000 */
+total=success+overfitting+underfitting+fail;
 *print total;
 
-/* percentage */
-pct_overfitting = 100*overfitting/total;
-pct_overfitting_1= 100*overfitting_1/total;
-pct_underfitting = 100*underfitting/total;
-pct_underfitting_1= 100*underfitting_1/total;
-pct_success = 100*success/total;
-*print pct_success pct_overfitting pct_overfitting_1 pct_underfitting pct_underfitting_1;
+/* percentage metrics */
+pct_success = success/total;
+pct_overfitting = overfitting/total;
+pct_underfitting = underfitting/total;
+pct_fail = fail/total;
 
-print "selection=stepwise and choose=BIC";
-print pct_success pct_overfitting pct_underfitting;
+/* create a matrix containing the percentages */
+results=pct_success//pct_overfitting//pct_underfitting//pct_fail;
+print results;
 
-/* graphiques */
+create resu from results[colname={'Probability'}];
+	append from results;
+close resu;
 
-submit;
-
-endsubmit;
 
 quit;
-
-
-

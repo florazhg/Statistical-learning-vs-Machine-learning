@@ -1,4 +1,4 @@
-/********************************************** DGP2 : MULTICOLLINEARITY *********************************************/
+/************************************ DGP4 : MULTICOLLINEARITY + OUTLIERS ********************************************/
 *OPTIONS NONOTES;
 proc iml;
 
@@ -28,47 +28,86 @@ underfitting=0; /* less than 5 true variables are selected */
 fail=0; /* less than 5 true variables are selected + other variables */
 
 /* change the algo and criteria here */
-%Let algo=ElasticNet;
-%Let criteria=sbc;
-%Let criteria2=cv;
+%Let algo=lar;
+%Let criteria=cp;
+%Let criteria2=sbc;
+
 
 /**************************************** 1000 data sets loop ****************************************/
 do i = 1 to 1000 ;
 	X5 = RandNormal(N, meanVec_X5, corrMatrix_X5);
 	X45 = RandNormal(N, meanVec_X45, covMatrix_X45);
+	X=X5||X45;
 
-	/*generate the first equation*/
+	/* add outliers */
+	do t=1 to N;
+		do j=1 to 10; /*outliers in the first 10 variables*/
+			u=uniform(0);
+			if u<0.9 then X[t,j]=normal(0);
+			else X[t,j]=normal(0)+5;
+		end;
+	end;
+	*call histogram(X[,2]);
+	
+	X5=X[,1:5];
+	
+	/* Iman Conover : the do loop (X5, corrMatrix_X5) => W */
+	S = J(N, P5);
+	/* T1: Create normal scores of each column */
+	do k = 1 to P5;
+		ranks = ranktie(X5[,k], "mean");          /* tied ranks */
+		S[,k] = quantile("Normal", ranks/(N+1)); /* van der Waerden scores */
+	end;
+	/* T2: apply two linear transformations to the scores */
+	CS = corr(S);        /* correlation of scores */
+	Q = root(CS);        /* Cholesky root of correlation of scores */
+	P = root(corrMatrix_X5);         /* Cholesky root of target correlation */
+	T = solve(Q,P);      /* same as  T = inv(Q) * P; */
+	Y = S*T;             /* transform scores: Y has rank corr close to target C */
+ 
+	/* T3: Permute or reorder data in the columns of X to have the same ranks as Y */
+	W = X5;
+	do k = 1 to ncol(Y);
+		rank = rank(Y[,k]);          /* use ranks as subscripts, so no tied ranks */
+		tmp = W[,k]; 
+		call sort(tmp); /* sort column by ranks */
+		W[,k] = tmp[rank];           /* reorder the column of X by the ranks of M */
+	end;
+
+	/*generate the equation*/
+	
 	epsilon = RandNormal(N, 0, 0.01); /* errors iid normal distribution */
 
 	/* equation */
-	Y = X5 * beta + epsilon;
+	Y = W * beta + epsilon;
+	
+	X45=X[,6:50];
 
 	/*creation of the final data set*/
-	dataset2 = Y||X5||X45;
+	dataset4 = Y||W||X45;
 	cname="y"||("X1":"X50");
 
-	create DGP2 from dataset2[colname=cname];
-	   append from dataset2;
-	   close DGP2;
-
-
-
+	create DGP4 from dataset4[colname=cname];
+	   append from dataset4;
+	   close DGP4;
+	
+	
 	/********** ALGORITHM TEST ***********/
 	submit;
 	
 
-	proc glmselect data=DGP2 outdesign=tab2 noprint;
+	proc glmselect data=DGP4 outdesign=tab4 noprint;
 	model y = X1-X50 /selection=&algo (CHOOSE=&criteria stop=&criteria2);
 	run;
 
 
-	proc transpose data=tab2 out=tab2;
+	proc transpose data=tab4 out=tab4;
 	run;
 	endsubmit;
 
-	use tab2;
+	use tab4;
 	read all;
-	close tab2;
+	close tab4;
 
 	/*creating the sets*/
 	selected_variables=_NAME_[1:nrow(_name_)-1]; /*selected variables*/
@@ -76,8 +115,8 @@ do i = 1 to 1000 ;
 
 	true_variables={"Intercept","X1","X2","X3","X4","X5"}; /*variables that need to be selected*/
 
-	inter=Xsect(selected_variables,true_variables); /*select the variable that our model predicted right*/
-	*print inter;
+	inter=Xsect(selected_variables,true_variables);
+	*print inter; /*select the variable that our model predicted right*/
 
 	if ncol(inter)=6 & nrow(selected_variables)=6 then 
 		success = success +1 ;
@@ -111,9 +150,9 @@ pct_fail = fail/total;
 results=pct_success//pct_overfitting//pct_underfitting//pct_fail;
 print results;
 
-create forward_AIC from results[colname={'Success' 'Overfitting' 'Underfitting' 'Fail'}];
+create DGP4_results from results[colname={'Probability'}];
 	append from results;
-close forward_AIC;
+close DGP4_results;
 
 
 quit;

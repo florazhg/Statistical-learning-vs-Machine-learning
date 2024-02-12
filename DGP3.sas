@@ -1,42 +1,47 @@
+/************************************************* DGP3 : OUTLIERS *************************************************/
+*OPTIONS NONOTES;
 proc iml;
 
-/* parameters */
+/**************************************** parameters ****************************************/
 N = 100;  /* number of observations */
 P = 50;   /* number of explanatory variables */
-beta = {1.5, 0.9, 1, 0.1, -0.5}; /* betas of our model */
+beta = {1.5, 0.9, 1, 1.8, -0.5}; /* betas of our model */
 
 /* null mean vector : 1 row of 50 zeros */
 meanVec = j(1, P, 0);
 
 /* variance-covariance matrix */
 covMatrix = I(P);
- 
-call randseed(123); /* for reproductible results */
 
-/* set the counters */
-success=0;
-overfitting=0;
-overfitting_1=0;
-underfitting=0;
-underfitting_1=0;
+/**************************************** counters ****************************************/
+success=0; /* all 5 true variables are selected */
+overfitting=0; /* all 5 true variables are selected + other variables */
+underfitting=0; /* less than 5 true variables are selected */
+fail=0; /* less than 5 true variables are selected + other variables */
 
-do i = 1 to 1000 ; /* 1000 databases*/
+/* change the algo and criteria here */
+%Let algo=forward;
+%Let criteria=CV;
+%Let criteria2=CV;
+
+/**************************************** 1000 data sets loop ****************************************/
+do i = 1 to 1000 ;
 	X = RandNormal(N, meanVec, covMatrix);
 	
-	/* add a few unusual points (outliers) to the last 10 obs of the first 2 columns*/
-	pi = constant('pi');
-	t = T(90:N) * pi / 6; /* evenly spaced points in [0, 2p] */
-	outliers = 5#cos(t) || 5#sin(t); /* evenly spaced on circle r=5 */
+	do t=1 to N;
+		do j=1 to 10; /*outliers in the first 10 variables*/
+			u=uniform(0);
+			if u<0.9 then X[t,j]=normal(0);
+			else X[t,j]=normal(0)+5;
+		end;
+	end;
 	
-	X[90:N,1:2] = outliers; /* concatenate MVN data and outliers */
 	
-	
-	/* visualize the outliers */
-	call histogram (X);
+	*call histogram(X[,2]);
 	
 	/*generate the equation*/
 	X5 = X[,1:5]; /*only use the first 5 explanatory variables*/
-	epsilon = RandNormal(N, 0, 0.1); /* errors iid normal distribution */
+	epsilon = RandNormal(N, 0, 0.01); /* errors iid normal distribution */
 
 	/* equation */
 	Y = X5 * beta + epsilon;
@@ -49,22 +54,13 @@ do i = 1 to 1000 ; /* 1000 databases*/
 	   append from dataset3;
 	   close DGP3;
 	
-	/* verify the outliers with box plot | to run without the 1000 loop */
-	submit;
-	proc sgplot data=DGP3;
-	hbox X1 / extreme;
-	hbox X2;
-	hbox X3;
-	run;
-	endsubmit;
 	
-	
-	/* ALGORITHM TEST */
+	/********** ALGORITHM TEST ***********/
 	submit;
 	
 
 	proc glmselect data=DGP3 outdesign=tab3 noprint;
-		model y = X1-X50 /selection=forward (choose=AIC);
+	model y = X1-X50 /selection=&algo (CHOOSE=&criteria stop=&criteria2);
 	run;
 
 
@@ -78,55 +74,47 @@ do i = 1 to 1000 ; /* 1000 databases*/
 
 	/*creating the sets*/
 	selected_variables=_NAME_[1:nrow(_name_)-1]; /*selected variables*/
-	print selected_variables;
+	*print selected_variables;
 
 	true_variables={"Intercept","X1","X2","X3","X4","X5"}; /*variables that need to be selected*/
 
 	inter=Xsect(selected_variables,true_variables);
-	print inter; /*select the variable that our model predicted right*/
+	*print inter; /*select the variable that our model predicted right*/
 
-	if ncol(inter)=6 & nrow(selected_variables)=6 then do;
-		*print "right selection";
+	if ncol(inter)=6 & nrow(selected_variables)=6 then 
 		success = success +1 ;
-		end;
+	else q=1;
 
-	else if ncol(inter)=6 & nrow(selected_variables)>7 then do;
+	if ncol(inter)=6 & nrow(selected_variables)>6 then 
 		overfitting = overfitting+1;
-		*print "overfitting";
-		end;
+	else q=1;
 	
-	else if ncol(inter)=6 & nrow(selected_variables)>6 then do;
-		overfitting_1 = overfitting_1+1;
-		*print "overfitting_1";
-		end;
-
-	else if ncol(inter) ^= 6 & nrow(selected_variables)<=6 then do;
+	if ncol(inter) < 6 & nrow(selected_variables)=ncol(inter) then 
 		underfitting = underfitting+1;
-		*print "underfitting";
-		end;
+	else q=1;
 
-	else if ncol(inter) ^= 6 & nrow(selected_variables)>=6 then do;
-		underfitting_1= underfitting_1+1;
-		*print "underfitting_1";
-		end;
-
+	if ncol(inter) < 6 & nrow(selected_variables)>=6 then 
+		fail= fail+1;
+	else q=1;
 end;
 
-/*calculate metrics after the loop, must be equal to 1000*/
-total=success+overfitting+overfitting_1+underfitting+underfitting_1;
+/* total must be equal to 1000 */
+total=success+overfitting+underfitting+fail;
 *print total;
 
-/* percentage */
-pct_overfitting = 100*overfitting/total;
-pct_overfitting_1= 100*overfitting_1/total;
-pct_underfitting = 100*underfitting/total;
-pct_underfitting_1= 100*underfitting_1/total;
-pct_success = 100*success/total;
-*print pct_success pct_overfitting pct_overfitting_1 pct_underfitting pct_underfitting_1;
+/* percentage metrics */
+pct_success = success/total;
+pct_overfitting = overfitting/total;
+pct_underfitting = underfitting/total;
+pct_fail = fail/total;
 
-print "selection=stepwise and choose=BIC";
-print pct_success pct_overfitting pct_underfitting;
+/* create a matrix containing the percentages */
+results=pct_success//pct_overfitting//pct_underfitting//pct_fail;
+print results;
+
+create forward_AIC from results[colname={'Success' 'Overfitting' 'Underfitting' 'Fail'}];
+	append from results;
+close forward_AIC;
 
 
 quit;
-
